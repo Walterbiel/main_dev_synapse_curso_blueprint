@@ -1,0 +1,79 @@
+name: CD - Deploy Synapse
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-hom:
+    runs-on: ubuntu-latest
+    environment: hom
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Identificar artefatos alterados neste push
+        id: changed
+        run: |
+          FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- pipeline/ notebook/ sqlscript/ trigger/)
+          echo "Artefatos alterados:"
+          echo "$FILES"
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$FILES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Login no Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy dos artefatos alterados no workspace HOM
+        run: |
+          FILES="${{ steps.changed.outputs.files }}"
+          if [ -z "$FILES" ]; then
+            echo "⚠️ Nenhum artefato alterado neste push. Nada a fazer."
+            exit 0
+          fi
+
+          echo "$FILES" | while read -r file; do
+            [ -z "$file" ] && continue
+
+            FOLDER=$(echo "$file" | cut -d'/' -f1)
+            NAME=$(basename "$file" .json)
+
+            echo "Publicando $NAME (tipo: $FOLDER) a partir de $file"
+
+            case "$FOLDER" in
+              pipeline)
+                az synapse pipeline create \
+                  --workspace-name ${{ vars.WORKSPACE_NAME }} \
+                  --name "$NAME" \
+                  --file @"$file"
+                ;;
+              notebook)
+                az synapse notebook create \
+                  --workspace-name ${{ vars.WORKSPACE_NAME }} \
+                  --name "$NAME" \
+                  --file @"$file"
+                ;;
+              sqlscript)
+                # sql-script create espera texto puro da query, não o JSON de recurso do Synapse.
+                # Extrai a query de dentro do JSON antes de chamar o comando.
+                jq -r '.properties.content.query' "$file" > /tmp/"$NAME".sql
+                az synapse sql-script create \
+                  --workspace-name ${{ vars.WORKSPACE_NAME }} \
+                  --name "$NAME" \
+                  --file /tmp/"$NAME".sql
+                ;;
+              trigger)
+                az synapse trigger create \
+                  --workspace-name ${{ vars.WORKSPACE_NAME }} \
+                  --name "$NAME" \
+                  --file @"$file"
+                ;;
+              *)
+                echo "⚠️ Pasta '$FOLDER' não reconhecida, pulando."
+                ;;
+            esac
+          done
