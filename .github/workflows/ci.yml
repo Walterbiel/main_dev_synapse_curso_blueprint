@@ -1,0 +1,36 @@
+name: CI - Validação Synapse
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-branch-name:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar padrão de nome da branch
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          echo "Branch de origem: $BRANCH"
+          if [[ ! "$BRANCH" =~ ^feature/ ]]; then
+            echo "❌ Branch '$BRANCH' não segue o padrão 'feature/*'"
+            exit 1
+          fi
+          echo "✅ Nome de branch válido"
+
+  validate-templates:
+    runs-on: ubuntu-latest
+    needs: validate-branch-name
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar templates ARM gerados pelo Synapse
+        run: |
+          if [ ! -f "TemplateForWorkspace.json" ]; then
+            echo "Template não encontrado. Publique o workspace antes do PR."
+            exit 1
+          fi
+          python -m json.tool TemplateForWorkspace.json > /dev/null
+
+      - name: Validar parâmetros
+        run: python -m json.tool TemplateParametersForWorkspace.json > /dev/null
